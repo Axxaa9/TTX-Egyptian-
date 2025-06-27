@@ -1,13 +1,8 @@
 # training/train.py
 
 import sys
-
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
-
-
-# training/train.py
 
 import torch
 import torch.nn as nn
@@ -21,6 +16,7 @@ CSV_PATH = "data/arabic_egy_cleaned/processed/processed.csv"
 NUM_EPOCHS = 100
 BATCH_SIZE = 16
 SAVE_PATH = "model.pth"
+HISTORY_DIR = "history"
 PRINT_EVERY = 10  # Print loss every N batches
 
 class TTSDataset(Dataset):
@@ -49,11 +45,28 @@ def build_vocab(dataset):
     print(f"✅ Vocab size: {len(vocab)}")
     return vocab
 
+def get_last_checkpoint(history_dir):
+    if not os.path.exists(history_dir):
+        return None, 0
+    
+    checkpoints = [f for f in os.listdir(history_dir) if f.startswith("model_epoch")]
+    if not checkpoints:
+        return None, 0
+    
+    # Extract epoch numbers and find the latest
+    epoch_numbers = [int(f.split('_')[1][5:].split('.')[0]) for f in checkpoints]
+    last_epoch = max(epoch_numbers)
+    last_checkpoint = f"model_epoch{last_epoch}.pth"
+    return os.path.join(history_dir, last_checkpoint), last_epoch
+
 def train():
     print("🔥 Training started...")
 
     if not os.path.exists(CSV_PATH):
         raise FileNotFoundError(f"❌ Dataset CSV not found: {CSV_PATH}")
+
+    # Create history directory if it doesn't exist
+    os.makedirs(HISTORY_DIR, exist_ok=True)
 
     dataset = TTSDataset(CSV_PATH)
     vocab = build_vocab(dataset)
@@ -71,10 +84,22 @@ def train():
     model = TacotronLike(vocab_size=len(vocab)).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
+    # Try to load the last checkpoint
+    last_checkpoint, last_epoch = get_last_checkpoint(HISTORY_DIR)
+    start_epoch = 0
+    
+    if last_checkpoint:
+        print(f"🔍 Found checkpoint: {last_checkpoint}")
+        model.load_state_dict(torch.load(last_checkpoint, map_location=device))
+        start_epoch = last_epoch
+        print(f"🔄 Resuming training from epoch {start_epoch + 1}")
+    else:
+        print("🔍 No checkpoints found, starting fresh training")
+
     print("✅ Model initialized")
     print(f"🚀 Starting training for {NUM_EPOCHS} epochs")
 
-    for epoch in range(NUM_EPOCHS):
+    for epoch in range(start_epoch, NUM_EPOCHS):
         model.train()
         total_loss = 0
         print(f"\n📆 Epoch {epoch + 1}/{NUM_EPOCHS}")
@@ -100,10 +125,10 @@ def train():
         epoch_loss = total_loss / len(loader)
         print(f"✅ Epoch {epoch + 1} complete | Avg Loss: {epoch_loss:.4f}")
 
-        # Save checkpoint every 10 epochs
-        if (epoch + 1) % 10 == 0 or (epoch + 1) == NUM_EPOCHS:
-            torch.save(model.state_dict(), f"model_epoch{epoch+1}.pth")
-            print(f"💾 Model checkpoint saved: model_epoch{epoch+1}.pth")
+        # Save checkpoint after each epoch
+        checkpoint_path = os.path.join(HISTORY_DIR, f"model_epoch{epoch+1}.pth")
+        torch.save(model.state_dict(), checkpoint_path)
+        print(f"💾 Model checkpoint saved: {checkpoint_path}")
 
     # Final save
     torch.save(model.state_dict(), SAVE_PATH)
